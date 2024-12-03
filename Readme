@@ -1,0 +1,18 @@
+terraform init 
+
+terraform validate
+
+terraform plan
+
+terrafrom apply
+
+update the storage account name in ADF main.tf 
+
+update the values for storage and keyvault in databrick main.tf 
+
+update the storage name in DataGen2 main.tf
+
+set TF_VAR_sql_connection_string="update the sql connection string value"
+
+
+set TF_VAR_sql_connection_string="Integrated Security=False;Data Source=test;Initial Catalog=test;User ID=test;Password=test"
