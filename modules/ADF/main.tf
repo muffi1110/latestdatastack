@@ -1,42 +1,30 @@
-module "locals" {
-  source = "../local"
+# Data source to retrieve the Key Vault
+data "azurerm_key_vault" "bqakv" {
+  name                = "bqakvtest"               # Replace with your Key Vault name
+  resource_group_name = "azuremvpstack-akv"       # Replace with your Resource Group name
 }
 
-# Azure Client Configuration
-data "azurerm_client_config" "current" {}
+# Data source to fetch the secret from Key Vault
+data "azurerm_key_vault_secret" "db_connection_string" {
+  name         = "sql-connection-string"          # Replace with your secret name
+  key_vault_id = data.azurerm_key_vault.bqakv.id
+}
 
-resource "azurerm_key_vault" "azakv" {
-  name                        = var.local_key_vault_name
-  location                    = var.location
-  resource_group_name         = var.resource_group_name
-  tenant_id                   = data.azurerm_client_config.current.tenant_id
-  sku_name                    = "standard"
+####################################################
+#assign the adf managed identity to key vault
 
-  access_policy {
-    tenant_id = data.azurerm_client_config.current.tenant_id
-    object_id = data.azurerm_client_config.current.object_id  # Adjust to your needs
-    secret_permissions = ["Get", "List", "Set", "Delete"]
+# Run Azure CLI Command to Set Key Vault Policy
+resource "null_resource" "assign_adf_to_keyvault" {
+  depends_on = [azurerm_data_factory.azuredfd]
+
+  provisioner "local-exec" {
+    command = <<EOT
+      az keyvault set-policy --name ${data.azurerm_key_vault.bqakv.name} --resource-group ${data.azurerm_key_vault.bqakv.resource_group_name} --object-id ${azurerm_data_factory.azuredfd.identity[0].principal_id} --secret-permissions get
+    EOT
   }
 }
 
-# Key Vault Secret for SQL Server Connection String
-resource "azurerm_key_vault_secret" "sql_connection_string" {
-  name         = "sql-server-connection-string"
-  value        = <<EOT
-    Server=AIP10193LT19664\SQLEXPRESS;
-    Database=EXAMPLEDB;
-    TrustServerCertificate=False;
-    User Id=sa;
-    Password=Password@1110;
-  EOT
-
-  key_vault_id = azurerm_key_vault.azakv.id
-
-  depends_on = [ azurerm_key_vault.azakv ]
-}
-
-
-###################################################3
+###################################################
 
 data "azurerm_resource_group" "rg" {
   name = var.resource_group_name
@@ -51,8 +39,6 @@ data "azurerm_storage_container" "bronze" {
   name = "bronze"
   storage_account_name = data.azurerm_storage_account.adlgstg.name
 }
-
-
 
 resource "random_string" "stg" {
   length  = 3
@@ -115,43 +101,62 @@ resource "azurerm_data_factory_pipeline" "adfpipeline" {
     }
   ]
   JSON
+
+  depends_on = [ null_resource.assign_adf_to_keyvault ]
 }
 
 # Linked service for SQL Server
 resource "azurerm_data_factory_linked_service_sql_server" "example" {
-  name            = "SqlServerLinkedService"
+  name            = "sql-server-linked-service"
   data_factory_id = azurerm_data_factory.azuredfd.id
 
-  connection_string = azurerm_key_vault_secret.sql_connection_string.value
+  connection_string = data.azurerm_key_vault_secret.db_connection_string.value
+  integration_runtime_name = azurerm_data_factory_integration_runtime_self_hosted.self_hosted_ir.name
+
+  depends_on = [ null_resource.assign_adf_to_keyvault,azurerm_data_factory_integration_runtime_self_hosted.self_hosted_ir ]
 }
 
 
 # Dataset for SQL Server Table
 resource "azurerm_data_factory_dataset_sql_server_table" "example" {
-  name                = "example-sql-dataset"
+  name                = "example_sql_dataset"
   data_factory_id     = azurerm_data_factory.azuredfd.id
   linked_service_name = azurerm_data_factory_linked_service_sql_server.example.name
-  table_name          = "EXAMPLEDB"  # Specify the SQL Server table name
+  table_name          = "table-1"  # Specify the SQL Server table name
+
+  depends_on = [ null_resource.assign_adf_to_keyvault, azurerm_data_factory_integration_runtime_self_hosted.self_hosted_ir ]
 }
 
 # Linked service for Blob Storage
 resource "azurerm_data_factory_linked_service_azure_blob_storage" "example_blob" {
-  name                    = "example-blob-storage-link"
+  name                    = "example_blob_storage_link"
   data_factory_id         = azurerm_data_factory.azuredfd.id
   use_managed_identity = true
   connection_string_insecure = data.azurerm_storage_account.adlgstg.primary_connection_string
+  
+
+  depends_on = [ null_resource.assign_adf_to_keyvault ]
 }
 
 # Dataset for Blob Storage
 resource "azurerm_data_factory_dataset_azure_blob" "example_blob" {
-  name                    = "example-blob-dataset"
+  name                    = "example_blob_dataset"
   data_factory_id         = azurerm_data_factory.azuredfd.id
   linked_service_name     = azurerm_data_factory_linked_service_azure_blob_storage.example_blob.name
 
   path     = "${data.azurerm_storage_container.bronze.name}"
+
+  depends_on = [ null_resource.assign_adf_to_keyvault ]
 }
 
+resource "azurerm_data_factory_trigger_schedule" "example" {
+  name            = "Pipeline-timer"
+  data_factory_id = azurerm_data_factory.azuredfd.id
+  pipeline_name   = azurerm_data_factory_pipeline.adfpipeline.name
 
+  interval  = 5
+  frequency = "Day"
+}
 
 
 #RBAC
@@ -162,44 +167,6 @@ resource "azurerm_role_assignment" "stgrbac" {
 
   depends_on = [ data.azurerm_storage_account.adlgstg ]
 }
-
-
-resource "random_string" "this" {
-  length  = 4
-  special = false
-  upper   = false
-  lower   = true
-  numeric = true
-}
-
-resource "azurerm_storage_account" "sourcestorage" {
-  name                     = format("${var.company}${var.env}${random_string.this.result}sou")  //update the storage account name
-  resource_group_name      = var.resource_group_name
-  location                 = var.location
-  account_tier             = "Standard"
-  account_replication_type = "GRS"
-}
-
-resource "azurerm_storage_account" "destinationstorage" {
-  name                     = format("adf${var.company}${var.env}${random_string.this.result}des")  //update the storage accountname
-  resource_group_name      = var.resource_group_name
-  location                 = var.location
-  account_tier             = "Standard"
-  account_replication_type = "GRS"
-}
-
-resource "azurerm_storage_container" "containersource" {
-  name                  = "coursecontainer" 
-  storage_account_name  = azurerm_storage_account.sourcestorage.name
-  container_access_type = "private"
-}
-
-resource "azurerm_storage_container" "containerdestination" {
-  name                  = "destinationcontainer" 
-  storage_account_name  = azurerm_storage_account.destinationstorage.name
-  container_access_type = "private"
-}
-
 
 
 

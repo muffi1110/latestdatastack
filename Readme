@@ -12,7 +12,20 @@ update the values for storage and keyvault in databrick main.tf
 
 update the storage name in DataGen2 main.tf
 
-set TF_VAR_sql_connection_string="update the sql connection string value"
+--------------------------------------------------------------------------------------
 
+Note: make sure the akv have all the access policy to get the secret
 
-set TF_VAR_sql_connection_string="Integrated Security=False;Data Source=test;Initial Catalog=test;User ID=test;Password=test"
+already created the keyvault and updated the connection string (Manaually created and uploaded the secret)
+
+Server=*******;Database=EXAMPLEDB;TrustServerCertificate=False;User Id=sa;Password=Password@1110;
+
+https://www.linkedin.com/pulse/connect-on-premise-sql-server-azure-data-factory-via-nithyanandam/
+
+install the sql server --- manual
+install the configure the sql server and create a db using ssms get the server name, user name, database and password --- manul
+install the shir in the local server where the sql server is running - manual -> exampleSelfHostedIR [Install it in the sql machine]
+
+updated the servername, username and password in secret ---
+create the managed identity >> adf to keyvault
+test connection

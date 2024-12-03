@@ -13,6 +13,12 @@ variable "vnet_name" {
   type        = string
 }
 
+variable "nsg_name" {
+  description = "The name of the Network Security Group"
+  type        = string
+}
+
+
 variable "vnet_address_space" {
   description = "The address space for the Virtual Network"
   type        = list(string)

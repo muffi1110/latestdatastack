@@ -51,6 +51,7 @@ module "vnet" {
   location             = var.location
   vnet_name            = var.vnet_name
   vnet_address_space   = var.vnet_address_space
+  nsg_name = var.nsg_name
 
   pub_subnet_az1 = var.pub_subnet_az1
   pub_subnet_az2 = var.pub_subnet_az2
@@ -77,11 +78,6 @@ module "vnet" {
 
   depends_on = [ module.resource_group, module.nsg, module.route_table ]
 }
-
-module "local" {
-  source = "../../modules/local"
-}
-
 
 # module "sqlserver" {
 #   source = "../../modules/sqlserver"
@@ -123,8 +119,6 @@ module "AzureDataFactory" {
   location = var.location
   private_subnet_az1 = var.private_subnet_az1
   vnet_name = var.vnet_name
-  local_key_vault_name = module.local.key_vault_name
-  #sql_connection_string = var.sql_connection_string
 
-  depends_on = [ module.resource_group, module.vnet, module.azuredatalakeGen, module.local ]
+  depends_on = [ module.resource_group, module.vnet, module.azuredatalakeGen]
 }
