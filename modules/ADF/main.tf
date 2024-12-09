@@ -10,18 +10,30 @@ data "azurerm_key_vault_secret" "db_connection_string" {
   key_vault_id = data.azurerm_key_vault.bqakv.id
 }
 
+data "azurerm_client_config" "current" {}
+
 ####################################################
 #assign the adf managed identity to key vault
 
 # Run Azure CLI Command to Set Key Vault Policy
-resource "null_resource" "assign_adf_to_keyvault" {
-  depends_on = [azurerm_data_factory.azuredfd]
+# resource "null_resource" "assign_adf_to_keyvault" {
+#   depends_on = [azurerm_data_factory.azuredfd]
 
-  provisioner "local-exec" {
-    command = <<EOT
-      az keyvault set-policy --name ${data.azurerm_key_vault.bqakv.name} --resource-group ${data.azurerm_key_vault.bqakv.resource_group_name} --object-id ${azurerm_data_factory.azuredfd.identity[0].principal_id} --secret-permissions get
-    EOT
-  }
+#   provisioner "local-exec" {
+#     command = <<EOT
+#       az keyvault set-policy --name ${data.azurerm_key_vault.bqakv.name} --resource-group ${data.azurerm_key_vault.bqakv.resource_group_name} --object-id ${azurerm_data_factory.azuredfd.identity[0].principal_id} --secret-permissions get
+#     EOT
+#   }
+# }
+
+resource "azurerm_key_vault_access_policy" "adf_to_keyvault" {
+  key_vault_id = data.azurerm_key_vault.bqakv.id
+  object_id    = azurerm_data_factory.azuredfd.identity[0].principal_id
+  tenant_id    = data.azurerm_client_config.current.tenant_id
+
+  secret_permissions = [
+    "Get"
+  ]
 }
 
 ###################################################
@@ -53,7 +65,7 @@ resource "azurerm_data_factory" "azuredfd" {
   name                = var.datafactory_name  // update the name
   location            = var.location
   resource_group_name = var.resource_group_name
-  public_network_enabled = true
+  public_network_enabled = false
   managed_virtual_network_enabled = true
 
   identity {
@@ -102,7 +114,7 @@ resource "azurerm_data_factory_pipeline" "adfpipeline" {
   ]
   JSON
 
-  depends_on = [ null_resource.assign_adf_to_keyvault ]
+  depends_on = [ azurerm_key_vault_access_policy.adf_to_keyvault ]
 }
 
 # Linked service for SQL Server
@@ -111,9 +123,8 @@ resource "azurerm_data_factory_linked_service_sql_server" "example" {
   data_factory_id = azurerm_data_factory.azuredfd.id
 
   connection_string = data.azurerm_key_vault_secret.db_connection_string.value
-  integration_runtime_name = azurerm_data_factory_integration_runtime_self_hosted.self_hosted_ir.name
 
-  depends_on = [ null_resource.assign_adf_to_keyvault,azurerm_data_factory_integration_runtime_self_hosted.self_hosted_ir ]
+  depends_on = [ azurerm_key_vault_access_policy.adf_to_keyvault,azurerm_data_factory_integration_runtime_self_hosted.self_hosted_ir ]
 }
 
 
@@ -124,7 +135,7 @@ resource "azurerm_data_factory_dataset_sql_server_table" "example" {
   linked_service_name = azurerm_data_factory_linked_service_sql_server.example.name
   table_name          = "table-1"  # Specify the SQL Server table name
 
-  depends_on = [ null_resource.assign_adf_to_keyvault, azurerm_data_factory_integration_runtime_self_hosted.self_hosted_ir ]
+  depends_on = [ azurerm_key_vault_access_policy.adf_to_keyvault, azurerm_data_factory_integration_runtime_self_hosted.self_hosted_ir ]
 }
 
 # Linked service for Blob Storage
@@ -135,7 +146,7 @@ resource "azurerm_data_factory_linked_service_azure_blob_storage" "example_blob"
   connection_string_insecure = data.azurerm_storage_account.adlgstg.primary_connection_string
   
 
-  depends_on = [ null_resource.assign_adf_to_keyvault ]
+  depends_on = [ azurerm_key_vault_access_policy.adf_to_keyvault ]
 }
 
 # Dataset for Blob Storage
@@ -146,7 +157,7 @@ resource "azurerm_data_factory_dataset_azure_blob" "example_blob" {
 
   path     = "${data.azurerm_storage_container.bronze.name}"
 
-  depends_on = [ null_resource.assign_adf_to_keyvault ]
+  depends_on = [ azurerm_key_vault_access_policy.adf_to_keyvault ]
 }
 
 resource "azurerm_data_factory_trigger_schedule" "example" {
