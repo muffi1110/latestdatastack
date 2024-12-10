@@ -35,9 +35,7 @@ resource "azurerm_key_vault_access_policy" "adf_to_keyvault" {
     "Get"
   ]
 }
-
-###################################################
-
+####################################################
 data "azurerm_resource_group" "rg" {
   name = var.resource_group_name
 }
@@ -60,6 +58,25 @@ resource "random_string" "stg" {
   numeric = true
 }
 
+###################################################
+
+#Azure file share linked service
+
+resource "azurerm_storage_account" "stgafs" {
+  name                     = format("azurefileshare${random_string.this.result}")
+  resource_group_name      = var.resource_group_name
+  location                 = var.location
+  account_tier             = "Standard"
+  account_replication_type = "LRS"
+}
+
+resource "azurerm_storage_share" "AzurefileShare" {
+  name                 = "demofileshare"
+  storage_account_name = azurerm_storage_account.stgafs.name
+}
+
+####################################################
+
 # Create Azure data factory with storage account and containers
 resource "azurerm_data_factory" "azuredfd" {
   name                = var.datafactory_name  // update the name
@@ -76,6 +93,8 @@ resource "azurerm_data_factory" "azuredfd" {
 resource "azurerm_data_factory_integration_runtime_self_hosted" "self_hosted_ir" {
   name            = "exampleSelfHostedIR"
   data_factory_id = azurerm_data_factory.azuredfd.id
+
+  depends_on = [ azurerm_key_vault_access_policy.adf_to_keyvault ]
 }
 
 # Data Factory Pipeline with Copy Activity
@@ -86,13 +105,13 @@ resource "azurerm_data_factory_pipeline" "adfpipeline" {
   activities_json = <<-JSON
   [
     {
-      "name": "CopyFromSQLtoBlob",
+      "name": "CopyFromFileShareToBlob",
       "type": "Copy",
       "dependsOn": [],
       "userProperties": [],
       "typeProperties": {
         "source": {
-          "type": "SqlSource"
+          "type": "FileSystemSource"
         },
         "sink": {
           "type": "BlobSink"
@@ -100,7 +119,7 @@ resource "azurerm_data_factory_pipeline" "adfpipeline" {
       },
       "inputs": [
         {
-          "referenceName": "${azurerm_data_factory_dataset_sql_server_table.example.name}",
+          "referenceName": "${azurerm_data_factory_dataset_file.example_file_dataset.name}",
           "type": "DatasetReference"
         }
       ],
@@ -114,28 +133,22 @@ resource "azurerm_data_factory_pipeline" "adfpipeline" {
   ]
   JSON
 
-  depends_on = [ azurerm_key_vault_access_policy.adf_to_keyvault ]
-}
-
-# Linked service for SQL Server
-resource "azurerm_data_factory_linked_service_sql_server" "example" {
-  name            = "sql-server-linked-service"
-  data_factory_id = azurerm_data_factory.azuredfd.id
-
-  connection_string = data.azurerm_key_vault_secret.db_connection_string.value
-
-  depends_on = [ azurerm_key_vault_access_policy.adf_to_keyvault,azurerm_data_factory_integration_runtime_self_hosted.self_hosted_ir ]
+  depends_on = [ azurerm_key_vault_access_policy.adf_to_keyvault, azurerm_storage_account.stgafs ]
 }
 
 
-# Dataset for SQL Server Table
-resource "azurerm_data_factory_dataset_sql_server_table" "example" {
-  name                = "example_sql_dataset"
-  data_factory_id     = azurerm_data_factory.azuredfd.id
-  linked_service_name = azurerm_data_factory_linked_service_sql_server.example.name
-  table_name          = "table-1"  # Specify the SQL Server table name
+resource "azurerm_data_factory_linked_service" "file_share" {
+  name                = "example-file-share-link"
+  resource_group_name = var.resource_group_name
+  data_factory_name   = azurerm_data_factory.azuredfd.id
 
-  depends_on = [ azurerm_key_vault_access_policy.adf_to_keyvault, azurerm_data_factory_integration_runtime_self_hosted.self_hosted_ir ]
+  type = "AzureFileStorage"
+
+  type_properties_json = jsonencode({
+    connectionString = "DefaultEndpointsProtocol=https;AccountName=${azurerm_storage_account.stgafs.name};AccountKey=${azurerm_storage_account.stgafs.primary_access_key}"
+  })
+
+  depends_on = [ azurerm_key_vault_access_policy.adf_to_keyvault, azurerm_storage_account.stgafs ]
 }
 
 # Linked service for Blob Storage
